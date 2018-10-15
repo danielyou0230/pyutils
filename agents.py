@@ -244,6 +244,21 @@ class ParallelAgent(object):
         #
         return partitions
 
+    def _apply(self, method, process_idx, data, *args):
+        """
+        Arguments:
+            method(method): Any method that performs preprocessing on
+                single-instance.
+            process_idx(int): Process index.
+            data(iterable object): A small part of iterable data.
+            *args(tuple): Other necessary arguments for the method.
+        """
+        desc = "Process {:02d}".format(process_idx)
+        result = list()
+        for itr in tqdm(data, position=process_idx, desc=desc):
+            result.append(method(itr, *args))
+        return result
+
     def add_parameters(self, param):
         self.param = param
 
@@ -252,8 +267,8 @@ class ParallelAgent(object):
             method=None,
             n_process=None,
             param=None,
-            unpack=False,
-            demo=False):
+            batch_op=False,
+            unpack=False):
         """
         Generic threading method.
         Arguments:
@@ -263,9 +278,10 @@ class ParallelAgent(object):
             n_process(int): The number of process to be run in parallel.
             param(tuple): A tuple of all additional parameters needed for
                 the method to be run in parallel.
+            batch_op(bool): The passing method performs batch operations on
+                the data. Asserted only when the passing method needs to.
             unpack(bool): Unpack the result from all process, or flatten,
                 which would look like input data
-            demo(bool): Demo mode, perform demo methods if asserted.
         Return:
             result(list of any type): List of return values from the method.
         """
@@ -274,9 +290,7 @@ class ParallelAgent(object):
         if param is not None:
             self.param = param
 
-        assert (method is not None) or demo
-        if demo:
-            method = self.demo_method
+        assert method is not None
 
         # Show multiprocessing settings
         print("Number of CPU cores: {:d}".format(self.n_cores))
@@ -287,21 +301,21 @@ class ParallelAgent(object):
         if self.param is not None:
             _data = [itr + self.param for itr in _data]
 
+        # For methods applying on single-instances
+        if not batch_op:
+            _data = [(method, ) + itr for itr in _data]
+
         print(" - Begin threading...")
         # Threading
         with Pool(processes=self.n_process) as p:
-            results = p.starmap(method, _data)
+            if batch_op:
+                results = p.starmap(method, _data)
+            else:
+                results = p.starmap(self._apply, _data)
 
         # Compensate those lines occupied by those progressbars
         print("\n" * self.n_process)
         print("Multiprocessing completed.")
-
-        # *** Demo mode only code BEGIN ***
-        if demo:
-            print("[DEMO] Return list contains:")
-            for idx, itr in enumerate(results, 1):
-                print(" - from Process {:02d}: {}".format(idx, itr))
-            print("Entire list looks like this:\n{}".format(results))
 
         # Returning the results after parallel processing
         if unpack:
@@ -310,81 +324,15 @@ class ParallelAgent(object):
                 results = list(chain.from_iterable(results))
             else:
                 print("Input is not list, please manually unpack it.")
-        # *** Demo mode only code END ***
-
         # No unpacking, remember to unpack yourself
         else:
             pass
 
         return results
 
-    def demo_method(self, process_idx, data, a, b):
-        """
-        """
-        # This line is just demonstrating what a process would get unneeded
-        print("Process {:02d} got: {}".format(process_idx, data))
-
-        # Follow the following two lines
-        desc = "Process {:02d}".format(process_idx)
-        result = list()
-
-        # Any processing function you would like to implemented recursively
-        # Explanation on passing "position" and "desc":
-        #   position(int): Manually aligning those progressbar for easilier
-        #           monitoring and interpreting (prevent them from
-        #           overlapping each other.)
-        #   desc(str): Marking the process's progressbar (shown before the
-        #           progressbar.)
-        #
-        # Illustration:
-        #   [desc]
-        # Process 01: 100%|████████████████████| 2/2 [00:02<00:00,  1.00s/it]
-        # Process 02: 100%|████████████████████| 3/3 [00:03<00:00,  1.00s/it]
-
-        # Follow the above guide for first line
-        for itr in tqdm(data, position=process_idx, desc=desc):
-            # Do anything you want to perform in parallel.
-            time.sleep(0.25)  # sleep for 0.25s
-            _processed = "{} working at {}".format(process_idx, itr)
-
-            # Add to the list
-            result.append(_processed)
-
-        # Returning the list
-        # (After returning, the list that collects all results from all
-        # processes is a list of length equal to the number of parallel
-        # processes with each element being the individual processed inputs.)
-        #
-        # results = [result_from_p1, result_from_p2, ...]
-        # each result_from_p* would be a list of processed instances
-        return result
-
-    def demo(self):
-        # Pre-settings for multiprocessing
-        self.n_process = 2
-
-        # Add parameters if needed by the method (either way is fine)
-        # (1) create a tuple for those parameter(s) and pass it in run()
-        #   only one parameter: (parameter1, )
-        #   many parameters :   (parameter1, parameter2, ...)
-        param = ("first", "second")
-        # (2) set parameter using method add_parameters()
-        # pagent.add_parameters(param)
-
-        # Create random data (any iterable instance is fine)
-        data = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12], [13, 14, 15]])
-
-        # Run in parallel
-        # "method": Must be given in run().
-        # "demo"  : Used to set and demonstrate the usage of this
-        #           agent, DO NOT SET IT TO TRUE while deploying it.
-        result = pagent.run(data=data, param=param, unpack=True, demo=True)
-        #
-        # Actual usage should look like this
-        # result = pagent.run(data=data, method=SOME_METHOD, param=param)
-
 
 if __name__ == "__main__":
+    """
     agent = GPUAgent()
     agent.get_usage()
     agent.set_threshold(5000)
@@ -392,5 +340,5 @@ if __name__ == "__main__":
     agent._driver_version()
     agent.get_info()
     print(agent.get_most_available())
-    pagent = ParallelAgent()
-    pagent.demo()
+    """
+    pass
