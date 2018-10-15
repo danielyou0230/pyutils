@@ -1,15 +1,18 @@
 import subprocess
 import re
 import os
+import numpy as np
 from multiprocessing import Pool, cpu_count
 from itertools import chain
-import numpy as np
+from tqdm import tqdm
+import time
+from itertools import chain
 
 
 class GPUAgent(object):
     """docstring for GPUAgent
     An GPU utilities agent (Docs to be completed)
-        Args:
+        Arguments:
             threshold(int or float): Threshold of available gpus.
             mapping(list): The mapping index of GPUs between information in
                 nvidia-smi and actual CUDA_VISIBLE_DEVICES index should be.
@@ -50,7 +53,7 @@ class GPUAgent(object):
     def _parse_command(self, cmd, grep=None, opt=None):
         """
         More to be implemented
-        Args:
+        Arguments:
             cmd(str): Command for getting gpu monitoring information.
             grep(str): Grep token for the command.
             opt(str): Options for the command.
@@ -194,74 +197,191 @@ class cmdAutoAgent(object):
 
 
 class ParallelAgent(object):
-    """docstring for ParallelAgent
+    """ docstring for ParallelAgent
+
+    Arguments:
+        n_process(int): The number parallel processes to run.
+        split(method): Customized split data methods. If not give, use
+            pre-defined self._split_data() as method to split data to
+            all paralled processes.
     """
 
-    def __init__(self, n_process=None):
+    def __init__(self, n_process=-1, split=None):
         super(ParallelAgent, self).__init__()
-        self.arg = arg
         self.n_cores = cpu_count()
-        self.n_process = (self.n_cores // 2) if n_process == None else n_process
+        self.n_process = self.n_cores // 2 if n_process == -1 else n_process
 
-    def split_data(self, data, n_splits):
+    def _split_data(self, data):
         """
-        Split data to minibatches with last batch may be larger or smaller.
+        Split data to partitions with last batch may be larger or smaller.
+
         Arguments:
             data(ndarray): Array of data.
-            n_splits(int): Number of slices to separate the data.
         Return:
-            partitioned_data(list): List of list containing any type of data.
+            partitions(tuple): tuple of list containing, use tuple to give
+                required parameters to the methods (in order):
+                (P_IDX, _data)
+
+                P_IDX: Process index for aligning progress bars.
+                _data: Partitioned data for each parallel process.
         """
         n_data = len(data) if type(data) is list else data.shape[0]
-        # Slice data for each thread
-        print(" - Slicing data for threading...")
-        print(" - Total number of data: {0}".format(n_data))
-
         # Calculate number of instance per partition
-        n_part = n_data // n_splits
+        n_part = n_data // self.n_process
+
+        # Slice data for each thread
+        print(" - Partitioning data for parallelisation...")
+        print(" - Total number of instances: {}".format(n_data))
+
         partitions = list()
-        for idx in range(n_splits):
+        for idx in range(self.n_process):
             # Generate indices for each slice
-            idx_begin = idx * n_part
+            begin = idx * n_part
             # Last partition may be larger or smaller
-            idx_end = (idx + 1) * n_part if idx != n_splits - 1 else None
-            # Append to the list
-            partitions.append(data[idx_begin:idx_end])
+            end = (idx + 1) * n_part if idx != self.n_process - 1 else None
+            # Append one part of instances to the list
+            partitions.append((idx + 1, data[begin:end]))
         #
         return partitions
 
-    def generic_threading(self, n_jobs, data, method, param=None, shared=False):
+    def add_parameters(self, param):
+        self.param = param
+
+    def run(self,
+            data,
+            method=None,
+            n_process=None,
+            param=None,
+            unpack=False,
+            demo=False):
         """
         Generic threading method.
         Arguments:
-            n_jobs(int): number of thead to run the target method
-            data(ndarray): Data that will be split and distributed to threads.
+            data(iterable objects): Data that desired to be processed in
+                parallel, should be iterable objects like list or np.array.
             method(method object): Threading target method
-            param(tuple): Tuple of additional parameters needed for the method.
-            shared: (undefined)
+            n_process(int): The number of process to be run in parallel.
+            param(tuple): A tuple of all additional parameters needed for
+                the method to be run in parallel.
+            unpack(bool): Unpack the result from all process, or flatten,
+                which would look like input data
+            demo(bool): Demo mode, perform demo methods if asserted.
         Return:
             result(list of any type): List of return values from the method.
         """
-        # Threading settings
-        # n_cores = cpu_count()
-        # n_process = (n_cores // 2) if n_jobs == None else n_jobs
+        if n_process is not None:
+            self.n_process = n_process
+        if param is not None:
+            self.param = param
+
+        assert (method is not None) or demo
+        if demo:
+            method = self.demo_method
+
+        # Show multiprocessing settings
         print("Number of CPU cores: {:d}".format(self.n_cores))
         print("Number of Threading: {:d}".format(self.n_process))
         #
-        thread_data = split_data(data, self.n_process)
-        if param is not None:
-            thread_data = [itr + param for itr in thread_data]
-        else:
-            pass
-        #
+        _data = self._split_data(data)
+        # Add parameters to each partitions if given
+        if self.param is not None:
+            _data = [itr + self.param for itr in _data]
+
         print(" - Begin threading...")
         # Threading
         with Pool(processes=self.n_process) as p:
-            p.starmap(method, thread_data)
+            results = p.starmap(method, _data)
+
+        # Compensate those lines occupied by those progressbars
+        print("\n" * self.n_process)
+        print("Multiprocessing completed.")
+
+        # *** Demo mode only code BEGIN ***
+        if demo:
+            print("[DEMO] Return list contains:")
+            for idx, itr in enumerate(results, 1):
+                print(" - from Process {:02d}: {}".format(idx, itr))
+            print("Entire list looks like this:\n{}".format(results))
+
+        # Returning the results after parallel processing
+        if unpack:
+            # WILL SUPPORT np.array after testing
+            if type(data) == list:
+                results = list(chain.from_iterable(results))
+            else:
+                print("Input is not list, please manually unpack it.")
+        # *** Demo mode only code END ***
+
+        # No unpacking, remember to unpack yourself
+        else:
+            pass
+
+        return results
+
+    def demo_method(self, process_idx, data, a, b):
+        """
+        """
+        # This line is just demonstrating what a process would get unneeded
+        print("Process {:02d} got: {}".format(process_idx, data))
+
+        # Follow the following two lines
+        desc = "Process {:02d}".format(process_idx)
+        result = list()
+
+        # Any processing function you would like to implemented recursively
+        # Explanation on passing "position" and "desc":
+        #   position(int): Manually aligning those progressbar for easilier
+        #           monitoring and interpreting (prevent them from
+        #           overlapping each other.)
+        #   desc(str): Marking the process's progressbar (shown before the
+        #           progressbar.)
         #
-        print("\n" * n_process)
-        print("All threads completed.")
-        return result if not shared else None
+        # Illustration:
+        #   [desc]
+        # Process 01: 100%|████████████████████| 2/2 [00:02<00:00,  1.00s/it]
+        # Process 02: 100%|████████████████████| 3/3 [00:03<00:00,  1.00s/it]
+
+        # Follow the above guide for first line
+        for itr in tqdm(data, position=process_idx, desc=desc):
+            # Do anything you want to perform in parallel.
+            time.sleep(0.25)  # sleep for 0.25s
+            _processed = "{} working at {}".format(process_idx, itr)
+
+            # Add to the list
+            result.append(_processed)
+
+        # Returning the list
+        # (After returning, the list that collects all results from all
+        # processes is a list of length equal to the number of parallel
+        # processes with each element being the individual processed inputs.)
+        #
+        # results = [result_from_p1, result_from_p2, ...]
+        # each result_from_p* would be a list of processed instances
+        return result
+
+    def demo(self):
+        # Pre-settings for multiprocessing
+        self.n_process = 2
+
+        # Add parameters if needed by the method (either way is fine)
+        # (1) create a tuple for those parameter(s) and pass it in run()
+        #   only one parameter: (parameter1, )
+        #   many parameters :   (parameter1, parameter2, ...)
+        param = ("first", "second")
+        # (2) set parameter using method add_parameters()
+        # pagent.add_parameters(param)
+
+        # Create random data (any iterable instance is fine)
+        data = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12], [13, 14, 15]])
+
+        # Run in parallel
+        # "method": Must be given in run().
+        # "demo"  : Used to set and demonstrate the usage of this
+        #           agent, DO NOT SET IT TO TRUE while deploying it.
+        result = pagent.run(data=data, param=param, unpack=True, demo=True)
+        #
+        # Actual usage should look like this
+        # result = pagent.run(data=data, method=SOME_METHOD, param=param)
 
 
 if __name__ == "__main__":
@@ -272,3 +392,5 @@ if __name__ == "__main__":
     agent._driver_version()
     agent.get_info()
     print(agent.get_most_available())
+    pagent = ParallelAgent()
+    pagent.demo()
