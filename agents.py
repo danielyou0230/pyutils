@@ -141,7 +141,7 @@ class GPUAgent(object):
             available = [(itr[0] > self.threshold) for itr in gpu]
             free = [itr[0] for idx, itr in enumerate(gpu) if available[idx]]
 
-        assert (type(self.criterion) == str) or (self.criterion is None)
+        assert (isinstance(self.criterion, str)) or (self.criterion is None)
         if self.criterion.lower() == "memory":
             print("Overriding decision criterion: {} first".format(
                 self.criterion))
@@ -197,7 +197,7 @@ class cmdAutoAgent(object):
 
 
 class ParallelAgent(object):
-    """ docstring for ParallelAgent
+    """ docstring for ParallelAgent (To-Be-Implemented)
 
     Arguments:
         n_process(int): The number parallel processes to run.
@@ -210,6 +210,7 @@ class ParallelAgent(object):
         super(ParallelAgent, self).__init__()
         self.n_cores = cpu_count()
         self.n_process = self.n_cores // 2 if n_process == -1 else n_process
+        self.split = split
 
     def _split_data(self, data):
         """
@@ -225,22 +226,28 @@ class ParallelAgent(object):
                 P_IDX: Process index for aligning progress bars.
                 _data: Partitioned data for each parallel process.
         """
-        n_data = len(data) if type(data) is list else data.shape[0]
-        # Calculate number of instance per partition
-        n_part = n_data // self.n_process
+        # Default splitting method
+        if self.split is None:
+            n_data = len(data) if isinstance(data, list) else data.shape[0]
+            # Calculate number of instance per partition
+            n_part = n_data // self.n_process
 
-        # Slice data for each thread
-        print(" - Partitioning data for parallelisation...")
-        print(" - Total number of instances: {}".format(n_data))
+            # Slice data for each thread
+            print(" - Partitioning data for parallelisation...")
+            print(" - Total number of instances: {}".format(n_data))
 
-        partitions = list()
-        for idx in range(self.n_process):
-            # Generate indices for each slice
-            begin = idx * n_part
-            # Last partition may be larger or smaller
-            end = (idx + 1) * n_part if idx != self.n_process - 1 else None
-            # Append one part of instances to the list
-            partitions.append((idx + 1, data[begin:end]))
+            partitions = list()
+            for idx in range(self.n_process):
+                # Generate indices for each slice
+                begin = idx * n_part
+                # Last partition may be larger or smaller
+                end = (idx + 1) * n_part if idx != self.n_process - 1 else None
+                # Append one part of instances to the list
+                partitions.append((idx + 1, data[begin:end]))
+
+        # Customized splitting method
+        else:
+            partitions = self.split(self.n_process, data)
         #
         return partitions
 
@@ -293,10 +300,12 @@ class ParallelAgent(object):
         assert method is not None
 
         # Show multiprocessing settings
-        print("Number of CPU cores: {:d}".format(self.n_cores))
-        print("Number of Threading: {:d}".format(self.n_process))
-        #
+        print("Available CPU cores: {:d}".format(self.n_cores))
+        print("Parallel Processes : {:d}".format(self.n_process))
+
+        # Partition data to segments equal to the number of n_process
         _data = self._split_data(data)
+
         # Add parameters to each partitions if given
         if self.param is not None:
             _data = [itr + self.param for itr in _data]
@@ -306,7 +315,7 @@ class ParallelAgent(object):
             _data = [(method, ) + itr for itr in _data]
 
         print(" - Begin threading...")
-        # Threading
+        # Multiprocessing
         with Pool(processes=self.n_process) as p:
             if batch_op:
                 results = p.starmap(method, _data)
@@ -315,12 +324,12 @@ class ParallelAgent(object):
 
         # Compensate those lines occupied by those progressbars
         print("\n" * self.n_process)
-        print("Multiprocessing completed.")
+        print("All processes completed.")
 
         # Returning the results after parallel processing
         if unpack:
             # WILL SUPPORT np.array after testing
-            if type(data) == list:
+            if isinstance(data, list):
                 results = list(chain.from_iterable(results))
             else:
                 print("Input is not list, please manually unpack it.")
