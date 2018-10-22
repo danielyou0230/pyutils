@@ -9,7 +9,6 @@ from torchvision import transforms
 class ImageDataset(Dataset):
     """
     Generic Pytorch Image dataset object
-
     Args:
         directory(str): The root path of where the images are stored
             in a hierarchical manner, i.e. the directory name of second
@@ -17,13 +16,11 @@ class ImageDataset(Dataset):
             them.
         ext(list or str): The valid target file extensions.
             (default: [".png", "jpeg", ".jpg"])
-        dump(bool): Dump the file_list if asserted.
         from_file(bool): Load data from file. Format: [PATH_TO_FILE] \t [LABEL]
-        from_list(list): If given, the module assumes the list has the format
+        preload(list): If given, the module assumes the list has the format
             [PATH_TO_FILE] \t [LABEL] in each entry.
         working_dir(str): Working directory for the data, to support data stored
             in different place with the file list.
-        output(str): The output filename to dump the file_list under directory
         transforms(torchvision.transform): Customized transformation option.
             [TO-DOs] Support multiple methods.
         verbose(bool): TO-BE-IMPLEMENTED
@@ -32,48 +29,79 @@ class ImageDataset(Dataset):
     def __init__(self,
                  directory=None,
                  ext=[".png", "jpeg", ".jpg"],
-                 dump=False,
                  from_file=False,
-                 from_list=None,
+                 preload=None,
                  working_dir=None,
-                 output="file_list.tsv",
                  transforms=None,
                  verbose=False):
         super(ImageDataset, self).__init__()
 
-        if directory is not None:
+        assert os.path.isdir(directory) or from_file or isinstance(
+            preload, list)
+        assert ext is not None
+
+        # Tree structure ordering or data.
+        #    [Template]             [Example]
+        # [Top]                 # Animals/
+        # |- Type_0             # |-cat/
+        #    |- file_0          #   |--cat01.jpg
+        #    |- file_1          #   |--cat02.jpg
+        #    |- ...             #   |-- ...
+        # |- Type_1             # |-dog/
+        #    |- file_0          #   |--dog/dog01.jpg
+        #    |- ...             #   |--...
+        # |- ...                # |- ...
+        if directory is not None and directory.endswith("/"):
             # Remove the slash symbol from the directory name for consistency
-            self.directory = directory[:-1] if directory.endswith(
-                "/") else directory
-        else:
-            print(
-                "*** Use given file list for dataset, follow the docstring format.***"
-            )
-        self.extensions = ext if type(ext) is list else [ext]
-        self.dump = dump
+            directory = directory[:-1]
+        self.directory = directory
+
+        # The set of file extensions that are considered as valid files
+        self.ext = ext if isinstance(ext, list) else [ext]
+
+        # Example of input file format (use tab as separator)
+        #    [PATH]          [LABEL]
+        # cat/cat01.jpg         0
+        # cat/cat02.jpg         0
+        # cat/...
+        # dog/dog01.jpg         1
+        # dog/dog02.jpg         1
+        # dog/...
+        # bird/bird01.jpg       2
+        # bird/...
+        # ...
         self.from_file = from_file
 
         # Working directory for the data
-        if working_dir is not None:
-            self.working_dir = working_dir[:-1] if working_dir.endswith(
-                "/") else working_dir
+        # (given if the paths in the file is local directory)
+        # Example: "Animals/" is locate at "../data"
+        # then working_dir should be ../data
+        if working_dir is not None and working_dir.endswith("/"):
+            working_dir = working_dir[:-1]
+        self.working_dir = working_dir
 
-        self.output = output
-        # [worked with specified transformations] To-Be further implemented
+        # [worked with specified transformations] To-Be-Implemented
         self.transforms = transforms
+
+        # If preload is given, check its validity and use it
+        if isinstance(preload, list):
+            for itr in preload:
+                assert os.path.isfile(itr[0]) and isinstance(itr[1], int)
+            self._list = preload
         # Get file list from given path or load from given list
-        self.file_list = self._get_filelist(
-        ) if directory is not None else from_list
+        else:
+            self._list = self._get_filelist()
 
     def __len__(self):
-        return len(self.file_list)
+        return len(self._list)
 
     def __getitem__(self, index):
         # Fetch label and file path
-        file_path, target = self.file_list[index]
+        _path, target = self._list[index]
         # Load image from given path and convert to torch.Tensor
-        image = Image.open(file_path)
-        image = self.transforms(image)
+        image = Image.open(_path)
+        if self.transforms is not None:
+            image = self.transforms(image)
 
         return (image, target)
 
@@ -85,7 +113,7 @@ class ImageDataset(Dataset):
 
             # Add working directory to the path if working_dir is given
             prefix = "" if self.working_dir is None else self.working_dir + "/"
-            tmp = [[itr[0] + prefix, int(itr[1])] for itr in tmp]
+            tmp = [["{}{}".format(prefix, itr[0]), int(itr[1])] for itr in tmp]
             # print("{:d} files contain in the file list".format(len(tmp)))
         else:
             # Get first level of the directory (a.k.a. labels)
@@ -98,21 +126,15 @@ class ImageDataset(Dataset):
                 # Full path name of current directory
                 current_dir = "{:s}/{:s}".format(self.directory, itr_label)
                 # Get all files
-                all_files = os.listdir(current_dir)
+                _all = os.listdir(current_dir)
 
                 # Filter out the files with unwanted extensions
                 files = list(
-                    filter(lambda x: os.path.splitext(x)[1] in self.extensions,
-                           all_files))
+                    filter(lambda x: os.path.splitext(x)[1] in self.ext, _all))
                 # Add full path to the file
                 files = [("{:s}/{:s}".format(current_dir, itr), idx)
                          for itr in files]
                 # Add all files to the list
                 tmp.extend(files)
-
-        # Dump file list to tsv file, format: [PATH_TO_FILE] \t [LABEL]
-        if self.dump:
-            df = pd.DataFrame(tmp, columns=["Path", "Label"])
-            df.to_csv(self.output, sep="\t", header=True, index=False)
 
         return tmp
