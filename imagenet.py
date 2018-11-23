@@ -32,20 +32,22 @@ def main(args):
     # Untar first level (i.e. train/train_t3/test/val)
     batch_untar(files, args.destination, args.sudo, verbose=True)
 
-    if args.type in ["all", "train"]:
+    if args.type in ["all", "train", "train_t3"]:
+        print(" * Unpacking train/train_t3 data")
         # Get training set name
-        files = [itr for itr in files if itr.endswith("_train.tar")]
-        directory = os.path.splitext(files[0])[0]
-        # Get tarballs under training set
-        files = getFile(directory, extension=".tar")
-        # Untar training set
-        print("Untarring training set")
-        batch_untar(
-            files,
-            args.destination,
-            args.sudo,
-            verbose=args.verbose,
-            flatten=args.flatten)
+        files = [itr for itr in files if "train" in itr]
+        for itr in files:
+            # print(files)
+            directory = os.path.splitext(itr)[0]
+            # Get tarballs under training set
+            files = getFile(directory, extension=".tar")
+            # Untar train / train_t3
+            batch_untar(
+                files,
+                args.destination,
+                args.sudo,
+                verbose=args.verbose,
+                flatten=args.flatten)
 
 
 def batch_untar(files, dest=None, sudo=False, verbose=False, flatten=False):
