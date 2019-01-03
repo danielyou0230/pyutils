@@ -1,9 +1,12 @@
+import cv2
 import os
 import torch
 import numpy as np
 from torch.utils.data import Dataset
 from PIL import Image
 from torchvision import transforms
+from torch.utils.data import Dataset
+from scipy.misc import imresize
 
 
 class ImageDataset(Dataset):
@@ -138,3 +141,120 @@ class ImageDataset(Dataset):
                 tmp.extend(files)
 
         return tmp
+
+
+class VideoDataset(Dataset):
+    """
+    docstring for VideoDataset
+
+    Args:
+        clipFileList(str): Path to the filelist.
+        size(tuple of ints): Size of the input to be reshaped to.
+        random(bool): Randomize the starting frame.
+        stride(int): Stride of sampling frames.
+        colorSpace(str): ["RGB", "BW"]
+    """
+
+    def __init__(self,
+                 clipFileList,
+                 size,
+                 n_clip=32,
+                 random=True,
+                 stride=2,
+                 colorSpace="RGB",
+                 grayscale=False,
+                 mean=[0.485, 0.456, 0.406],
+                 std=[0.229, 0.224, 0.225],
+                 transform=None):
+        super(videoDataset, self).__init__()
+        self.cliplist = self.getClipList(clipFileList)  # list()
+
+        # Parameters for video segments
+        self.random = random
+        self.stride = stride
+        self.n_clip = n_clip
+        self.size = size
+        # Calculate time span of a segment
+        self.time_span = stride * n_clip
+        # Depth (Channels)
+        self.clip_ch = {"RGB": 3, "BW": 1}
+        self.channels = self.clip_ch[colorSpace]
+        self.grayscale = grayscale
+        self.transform = transform
+        self.basic_transform = transforms.Compose(
+            [transforms.Normalize(mean, std)])
+
+        print("files: {}".format(self.cliplist))
+
+    def __len__(self):
+        return len(self.cliplist)
+
+    def __getitem__(self, index):
+        return self.readVideo(self.cliplist[index])
+
+    def getClipList(self, filename):
+        with open(filename, "r") as f:
+            cliplist = f.read().splitlines()
+
+        cliplist = [itr.split(" ") for itr in cliplist]
+        return cliplist
+
+    def sampleFrame(self, f):
+        # Normal vidoes
+        if (f > self.time_span) and self.random:
+            begin = np.random.choice(f - self.time_span)
+        # Video with frame number less than time span.
+        else:
+            begin = 0
+
+        # Sample the frame indices
+        sampled_idx = [(begin + i * self.stride) for i in range(self.n_clip)]
+        sampled_idx = np.array(sampled_idx)
+
+        if f < self.time_span:
+            # sampled_idx = [i % f for i in range(self.n_clip)]
+            sampled_idx = sampled_idx % f
+
+        return sampled_idx
+
+    def readVideo(self, filename):
+        # Open the video file
+        cap = cv2.VideoCapture(filename[0])
+        # Get Video info
+        frameC = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        frameW = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frameH = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # frames = torch.FloatTensor(self.channels, frameC, frameH, frameW)
+        frames = torch.FloatTensor(self.channels, frameC, self.size, self.size)
+        failedClip = False
+        for f in range(frameC):
+            # Capture video from file
+            valid, frame = cap.read()
+            if valid:
+                # Resize frame
+                frame = imresize(frame, size=(self.size, self.size))
+                frame = torch.from_numpy(frame).float()
+                # dimension: HWC -> CHW
+                frame = frame.permute(2, 0, 1)
+
+                # Apply transformation on the frame
+                frame = self.basic_transform(frame)
+                if self.transform is not None:
+                    frame = self.transform(frame)
+
+                # Write frame to tensor
+                frames[:, f, :, :] = frame
+
+            else:
+                print("Skipped: {:s} (at frame {:d})".format(filename, f))
+                failedClip = True
+                break
+
+        # Randomly sample frames from videos
+        sampled_idx = self.sampleFrame(frameC)
+        frames = frames[:, sampled_idx, :, :]
+        # Set label for the video
+        label = int(filename[1])
+
+        return frames, label  # , failedClip
